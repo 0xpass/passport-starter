@@ -1,113 +1,262 @@
-import Image from 'next/image'
+"use client";
+import { useGoogleLogin } from "@react-oauth/google";
+import { NewLambda, Passport } from "@0xpass/passport";
+import { useState } from "react";
+import axios from "axios";
+import { createPassportClient } from "@0xpass/passport-viem";
+import { mainnet } from "viem/chains";
+import { http, WalletClient } from "viem";
 
 export default function Home() {
+  const passport = new Passport();
+
+  const [email, setEmail] = useState("");
+  const [otp, setOtp] = useState("");
+  const [guess, setGuess] = useState("");
+
+  const [session, setSession] = useState("");
+
+  const googleClientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
+  const googleClientSecret = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_SECRET;
+
+  const alchemyUrl = process.env.NEXT_PUBLIC_ALCHEMY_URL;
+  const fallbackProvider = http(alchemyUrl);
+
+  const googleLogin = useGoogleLogin({
+    flow: "auth-code",
+    onSuccess: async (codeResponse) => {
+      const token = await getAccessTokenFromCode(codeResponse.code);
+
+      const session = await passport.getSession({
+        scope_id: "1",
+        verifier_type: "google",
+        code: token.toString(),
+      });
+
+      console.log(session);
+
+      setSession(JSON.stringify(session.result));
+    },
+    onError: (errorResponse) => console.log(errorResponse),
+  });
+
+  async function getAccessTokenFromCode(code: any): Promise<String> {
+    const tokenUrl = "https://oauth2.googleapis.com/token";
+
+    const data = {
+      code: code,
+      client_id: googleClientId,
+      client_secret: googleClientSecret,
+      redirect_uri: window.location.origin,
+      grant_type: "authorization_code",
+    };
+
+    try {
+      const response = await axios.post(tokenUrl, data, {
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+      });
+
+      return response.data.access_token;
+    } catch (error) {
+      console.error("Error fetching access token");
+      throw error;
+    }
+  }
+
+  async function signMessage() {
+    const client: WalletClient = createPassportClient(
+      session,
+      fallbackProvider,
+      mainnet
+    );
+
+    client
+      .signMessage({
+        account: "0x00",
+        message: "hello world",
+      })
+      .then((res) => alert(JSON.stringify(res)))
+      .catch((err) => alert(JSON.stringify(err)));
+  }
+
+  async function fetchAddress() {
+    const client: WalletClient = createPassportClient(
+      session,
+      fallbackProvider,
+      mainnet
+    );
+
+    client
+      .requestAddresses()
+      .then((res) => alert(JSON.stringify(res)))
+      .catch((err) => alert(JSON.stringify(err)));
+  }
+
+  async function signTx() {
+    const client: WalletClient = createPassportClient(
+      session,
+      fallbackProvider,
+      mainnet
+    );
+
+    const transaction = await client.prepareTransactionRequest({
+      account: "0x4A67aED1aeE7c26b7063987E7dD226f5f5207ED2",
+      to: "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+      value: BigInt(1000000000000000),
+      chain: mainnet,
+    });
+
+    client
+      .signTransaction(transaction)
+      .then((res) => alert(JSON.stringify(res)))
+      .catch((err) => alert(JSON.stringify(err)));
+  }
+
+  const lambdaData: NewLambda = {
+    authorization: {
+      type: "none",
+    },
+    max_executions: 1,
+    envs: [],
+    verifications: {
+      count: 1,
+    },
+    conditions: [
+      {
+        type: "code",
+        code: `return ${guess} == 8;`,
+        output_type: "boolean",
+        substitution: false,
+      },
+    ],
+    actions: {
+      type: "personal_sign",
+      check: "",
+      data: "0x000000",
+      substitution: true,
+    },
+    postHook: [],
+  };
+
   return (
-    <main className="flex min-h-screen flex-col items-center justify-between p-24">
-      <div className="z-10 max-w-5xl w-full items-center justify-between font-mono text-sm lg:flex">
-        <p className="fixed left-0 top-0 flex w-full justify-center border-b border-gray-300 bg-gradient-to-b from-zinc-200 pb-6 pt-8 backdrop-blur-2xl dark:border-neutral-800 dark:bg-zinc-800/30 dark:from-inherit lg:static lg:w-auto  lg:rounded-xl lg:border lg:bg-gray-200 lg:p-4 lg:dark:bg-zinc-800/30">
-          Get started by editing&nbsp;
-          <code className="font-mono font-bold">src/app/page.tsx</code>
-        </p>
-        <div className="fixed bottom-0 left-0 flex h-48 w-full items-end justify-center bg-gradient-to-t from-white via-white dark:from-black dark:via-black lg:static lg:h-auto lg:w-auto lg:bg-none">
-          <a
-            className="pointer-events-none flex place-items-center gap-2 p-8 lg:pointer-events-auto lg:p-0"
-            href="https://vercel.com?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+    <>
+      <main className="flex min-h-screen flex-col items-center">
+        <div className="flex flex-col space-y-4 pt-16">
+          <button
+            className="border border-gray-400 rounded-md p-2 bg-black"
+            onClick={googleLogin}
           >
-            By{' '}
-            <Image
-              src="/vercel.svg"
-              alt="Vercel Logo"
-              className="dark:invert"
-              width={100}
-              height={24}
-              priority
-            />
-          </a>
+            Login with Google
+          </button>
+
+          <input
+            type="text"
+            className="border border-gray-400 rounded-md p-2 bg-black"
+            placeholder="Email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+          />
+          <button
+            className="border border-gray-400 rounded-md p-2 bg-black"
+            onClick={async () => {
+              const response = await passport.sendOtp({
+                scope_id: "1",
+                channel_type: "email",
+                destination: email,
+              });
+
+              console.log(response);
+            }}
+          >
+            Request OTP
+          </button>
+
+          <input
+            type="text"
+            placeholder="OTP"
+            className="border border-gray-400 rounded-md p-2 bg-black"
+            value={otp}
+            onChange={(e) => setOtp(e.target.value)}
+          />
+          <button
+            className="border border-gray-400 rounded-md p-2 bg-black"
+            onClick={async () => {
+              const response = await passport.getSession({
+                scope_id: "1",
+                verifier_type: "email",
+                code: otp,
+              });
+
+              setSession(JSON.stringify(response.result));
+            }}
+          >
+            Submit OTP
+          </button>
         </div>
-      </div>
 
-      <div className="relative flex place-items-center before:absolute before:h-[300px] before:w-[480px] before:-translate-x-1/2 before:rounded-full before:bg-gradient-radial before:from-white before:to-transparent before:blur-2xl before:content-[''] after:absolute after:-z-20 after:h-[180px] after:w-[240px] after:translate-x-1/3 after:bg-gradient-conic after:from-sky-200 after:via-blue-200 after:blur-2xl after:content-[''] before:dark:bg-gradient-to-br before:dark:from-transparent before:dark:to-blue-700 before:dark:opacity-10 after:dark:from-sky-900 after:dark:via-[#0141ff] after:dark:opacity-40 before:lg:h-[360px] z-[-1]">
-        <Image
-          className="relative dark:drop-shadow-[0_0_0.3rem_#ffffff70] dark:invert"
-          src="/next.svg"
-          alt="Next.js Logo"
-          width={180}
-          height={37}
-          priority
-        />
-      </div>
-
-      <div className="mb-32 grid text-center lg:max-w-5xl lg:w-full lg:mb-0 lg:grid-cols-4 lg:text-left">
-        <a
-          href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`mb-3 text-2xl font-semibold`}>
-            Docs{' '}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className={`m-0 max-w-[30ch] text-sm opacity-50`}>
-            Find in-depth information about Next.js features and API.
+        <div className="flex flex-col space-y-8 items-center mt-10 mb-8">
+          <p className="italic">
+            You will require a session from one of the above authentication
+            methods <br /> before being able to carry out the following
+            functionalities.
           </p>
-        </a>
 
-        <a
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`mb-3 text-2xl font-semibold`}>
-            Learn{' '}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className={`m-0 max-w-[30ch] text-sm opacity-50`}>
-            Learn about Next.js in an interactive course with&nbsp;quizzes!
-          </p>
-        </a>
+          <button
+            className="border border-gray-400 rounded-md p-2 bg-black w-52"
+            onClick={fetchAddress}
+          >
+            Get Address
+          </button>
+          <button
+            className="border border-gray-400 rounded-md p-2 bg-black w-52"
+            onClick={signMessage}
+          >
+            Sign Message
+          </button>
+          <button
+            className="border border-gray-400 rounded-md p-2 bg-black w-52"
+            onClick={signTx}
+          >
+            Sign Transaction
+          </button>
+        </div>
 
-        <a
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`mb-3 text-2xl font-semibold`}>
-            Templates{' '}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className={`m-0 max-w-[30ch] text-sm opacity-50`}>
-            Explore starter templates for Next.js.
-          </p>
-        </a>
+        <div className="flex flex-col space-y-4 items-center -mt-8 p-8">
+          <p>Lambda Guess</p>
+          <code className="text-xs -mt-3">
+            Guess a number (it's 8), try playing around with it in the code
+          </code>
+          <input
+            type="text"
+            className="border border-gray-400 rounded-md p-2 bg-black"
+            placeholder="Guess"
+            value={guess}
+            onChange={(e) => setGuess(e.target.value)}
+          />
+          <button
+            className="border border-gray-400 rounded-md p-2 bg-black w-48"
+            onClick={async () => {
+              const uuid = await passport.lambdaNew({
+                data: lambdaData,
+                session: JSON.parse(session),
+              });
 
-        <a
-          href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`mb-3 text-2xl font-semibold`}>
-            Deploy{' '}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className={`m-0 max-w-[30ch] text-sm opacity-50`}>
-            Instantly deploy your Next.js site to a shareable URL with Vercel.
-          </p>
-        </a>
-      </div>
-    </main>
-  )
+              const signature = await passport.lambdaCall({
+                data: {
+                  id: uuid.result,
+                  params: [],
+                },
+              });
+
+              alert(JSON.stringify(signature.result));
+            }}
+          >
+            Submit Guess
+          </button>
+        </div>
+      </main>
+    </>
+  );
 }
